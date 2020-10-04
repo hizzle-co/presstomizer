@@ -8,7 +8,7 @@
  *
  * @since 1.0.0
  */
-class presstomizer {
+class Email_Customizer_Presstomizer {
 
 	/**
 	 * Contains the unique id of this instance.
@@ -37,21 +37,20 @@ class presstomizer {
 	 * @param string $id An alphanumeric unique id for your specific instance.
 	 */
 	public function __construct( $id ) {
-
 		$this->id = sanitize_key( $id );
-
-		// Setup the customizer in case this is a customizer request.
-		if ( isset( $_REQUEST['wp_customize'] ) && isset( $_GET[ $this->id ] ) ) {
-			$this->set_up_custom_customizer();
-		}
-
+		add_action( 'init', array( $this, 'set_up_custom_customizer' ) );
 	}
 
 	/**
 	 * Sets up our custom customizer.
 	 *
 	 */
-	protected function set_up_custom_customizer() {
+	public function set_up_custom_customizer() {
+
+		// Ensure this is our customizer request.
+		if ( ! is_customize_preview() || ! isset( $_GET[ $this->id ] ) ) {
+			return;
+		}
 
 		// Remove sections/panels/controls that are not ours.
 		add_filter( 'customize_section_active', array( $this, 'remove_third_party_sections' ), 999999, 2 );
@@ -60,12 +59,12 @@ class presstomizer {
 		// Do not load core components.
 		add_filter( 'customize_loaded_components', '__return_empty_array', 999999 );
 
-		// Cleanup the customizer and the frontend.
-		add_action( 'customize_register', array( $this, 'clean_up_customizer' ), 999999 );
-		add_action( 'init', array( $this, 'clean_up_frontend' ), 999999 );
-
 		// Load our own template.
 		add_action( 'template_redirect', array( $this, 'maybe_display_frontend' ) );
+
+		// Scripts.
+		add_action( "presstomizer_{$this->id}_footer", array( $this, 'print_footer' ) );
+
 	}
 
 	/**
@@ -76,7 +75,7 @@ class presstomizer {
 	 *
 	 * @return bool
 	 */
-	public function remove_other_sections( $is_active, $section ) {
+	public function remove_third_party_sections( $is_active, $section ) {
 		return in_array( $section->id, $this->sections, true );
 	}
 
@@ -90,19 +89,6 @@ class presstomizer {
 	 */
 	public function remove_third_party_panels( $is_active, $panel ) {
 		return in_array( $panel->id, $this->panels, true );
-	}
-
-	/**
-	 * Remove third-party customizer elements.
-	 *
-	 * @param WP_Customize_Manager $wp_customize An instance of WP_Customize_Manager.
-	 */
-	public function clean_up_customizer( $wp_customize ) {
-
-		$wp_customize->remove_panel( 'themes' );
-		$wp_customize->remove_section( 'title_tagline' );
-		remove_all_actions( 'admin_print_footer_scripts' );
-
 	}
 
 	/**
@@ -158,11 +144,88 @@ class presstomizer {
 	/**
 	 * Displays our page on the frontend.
 	 *
+	 * Ensure you call `do_action( "presstomizer_{$this->id}_footer" )` if "is_customize_preview()" returns true.
 	 */
 	public function display_frontend() {
-		do_action( "prestomizer_frontend_display_{$this->id}" );
+		do_action( "presstomizer_frontend_display_{$this->id}" );
+	}
+
+	/**
+	 * Returns the URL to our customizer instance.
+	 *
+	 * @param string $action_prefix Optional action prefix.
+	 */
+	public function get_customizer_url( $action_prefix = 1 ) {
+
+		$current_url   = ( is_ssl() ? 'https://' : 'http://' ) . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI'];
+		return add_query_arg(
+			array(
+				'url'             => urlencode( $this->get_frontend_url( $action_prefix ) ),
+				'return'          => urlencode( $current_url ),
+				$this->id         => $action_prefix,
+			),
+			wp_customize_url()
+		);
+
+	}
+
+	/**
+	 * Returns the URL to our customizer frontend instance.
+	 *
+	 * @param string $action_prefix Optional action prefix.
+	 */
+	public function get_frontend_url( $action_prefix = 1 ) {
+		return add_query_arg( $this->id, $action_prefix, home_url() );
+	}
+
+	/**
+	 * Returns the capability that can access our custom customizer.
+	 *
+	 * @return string
+	 */
+	public function get_capability() {
+		return apply_filters( "presstomizer_capability_for_{$this->id}", 'customize' );
+	}
+
+	/**
+	 * If we are in our template strip everything out and leave it clean.
+	 *
+	 * @since 1.0.0
+	 */
+	public function print_footer() {
+		$this->remove_scripts();
+		wp_print_footer_scripts();
+	}
+
+	/**
+	 * If we are in our template strip everything out and leave it clean.
+	 *
+	 * @since 1.0.0
+	 */
+	public function remove_scripts() {
+		global $wp_scripts;
+
+		$exceptions = apply_filters(
+			"presstomizer_{$this->id}_allowed_scripts",
+			array(
+				'jquery',
+				'customize-preview',
+				'customize-controls',
+			)
+		);
+
+		if ( is_object( $wp_scripts ) && isset( $wp_scripts->queue ) && is_array( $wp_scripts->queue ) ) {
+
+			foreach ( $wp_scripts->queue as $handle ) {
+
+				if ( ! in_array( $handle, $exceptions, true ) ) {
+					wp_dequeue_script( $handle );
+				}
+				
+			}
+
+		}
+
 	}
 
 }
-
-// TODO: Rename the "customize_controls_print_footer_scripts" && "customize_controls_enqueue_scripts" actions && "customize_controls_print_styles" and attach the code wp hooks.
