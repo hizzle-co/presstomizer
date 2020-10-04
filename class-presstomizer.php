@@ -8,7 +8,7 @@
  *
  * @since 1.0.0
  */
-class Email_Customizer_Presstomizer {
+class presstomizer {
 
 	/**
 	 * Contains the unique id of this instance.
@@ -123,7 +123,7 @@ class Email_Customizer_Presstomizer {
 	 * @return WP_Customize_Section
 	 */
 	public function add_section( $customizer, $id, $args = array() ) {
-		$this->panels[] = is_string( $id ) ? $id : $id->id;
+		$this->sections[] = is_string( $id ) ? $id : $id->id;
 		return $customizer->add_section( $id, $args );
 	}
 
