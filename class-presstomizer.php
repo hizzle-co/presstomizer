@@ -32,6 +32,13 @@ class presstomizer {
 	protected $sections = array();
 
 	/**
+	 * Contains a cache of all our sections.
+	 *
+	 * @var array
+	 */
+	protected $controls = array();
+
+	/**
 	 * Class constructor.
 	 *
 	 * @param string $id An alphanumeric unique id for your specific instance.
@@ -55,6 +62,7 @@ class presstomizer {
 		// Remove sections/panels/controls that are not ours.
 		add_filter( 'customize_section_active', array( $this, 'remove_third_party_sections' ), 999999, 2 );
 		add_filter( 'customize_panel_active', array( $this, 'remove_third_party_panels' ), 999999, 2 );
+		add_filter( 'customize_control_active', array( $this, 'remove_third_party_controls' ), 999999, 2 );
 
 		// Do not load core components.
 		add_filter( 'customize_loaded_components', '__return_empty_array', 999999 );
@@ -62,9 +70,14 @@ class presstomizer {
 		// Load our own template.
 		add_action( 'template_redirect', array( $this, 'maybe_display_frontend' ) );
 
-		// Scripts.
-		add_action( "presstomizer_{$this->id}_footer", array( $this, 'print_footer' ) );
+		add_action( 'customize_controls_enqueue_scripts', array( $this, 'enqueue_scripts' ) );
+		add_action( 'customize_preview_init', array( $this, 'enqueue_template_scripts' ), 99 );
 
+		add_action( 'wp_head', array( $this, 'remove_all_header_actions' ), -1000 );
+		add_action( 'wp_head', array( $this, 'remove_external_scripts' ), 7 ); // wp_print_styles loaded at 8
+
+		add_action( 'wp_footer', array( $this, 'remove_all_footer_actions' ), -1000 );
+		add_action( 'wp_footer', array( $this, 'remove_external_scripts' ), 19 ); // wp_print_footer_scripts loaded at 20
 	}
 
 	/**
@@ -76,7 +89,7 @@ class presstomizer {
 	 * @return bool
 	 */
 	public function remove_third_party_sections( $is_active, $section ) {
-		return in_array( $section->id, $this->sections, true );
+		return $is_active && in_array( $section->id, $this->sections, true );
 	}
 
 	/**
@@ -88,7 +101,19 @@ class presstomizer {
 	 * @return bool
 	 */
 	public function remove_third_party_panels( $is_active, $panel ) {
-		return in_array( $panel->id, $this->panels, true );
+		return $is_active && in_array( $panel->id, $this->panels, true );
+	}
+
+	/**
+	 * Remover other controls
+	 *
+	 * @param bool                $active Whether the Customizer panel is active.
+	 * @param WP_Customize_Control $control  WP_Customize_Control instance.
+	 *
+	 * @return bool
+	 */
+	public function remove_third_party_controls( $is_active, $control ) {
+		return $is_active && in_array( $control->id, $this->controls, true );
 	}
 
 	/**
@@ -125,6 +150,24 @@ class presstomizer {
 	public function add_section( $customizer, $id, $args = array() ) {
 		$this->sections[] = is_string( $id ) ? $id : $id->id;
 		return $customizer->add_section( $id, $args );
+	}
+
+	/**
+	 * Add a new customizer control.
+	 *
+	 * Use this method to register a control instead of directly calling WP_Customize_Manager::add_control
+	 * so that we can link the control to your customizer instance.
+	 *
+	 * @param WP_Customize_Manager        $customizer An instance of the customize manager class.
+	 * @param WP_Customize_Control|string $id — Customize Control object, or ID.
+	 * @param array                       $args       Optional. Array of properties for the new control object.
+	 * @see WP_Customize_Manager::add_control
+	 *
+	 * @return WP_Customize_Control
+	 */
+	public function add_control( $customizer, $id, $args = array() ) {
+		$this->controls[] = is_string( $id ) ? $id : $id->id;
+		return $customizer->add_control( $id, $args );
 	}
 
 	/**
@@ -188,13 +231,32 @@ class presstomizer {
 	}
 
 	/**
-	 * If we are in our template strip everything out and leave it clean.
+	 * Checks if a script is built into WP.
 	 *
-	 * @since 1.0.0
+	 * @return bool
 	 */
-	public function print_footer() {
-		$this->remove_scripts();
-		wp_print_footer_scripts();
+	public function is_built_in( $handle ) {
+		return strpos( $handle, 'wp-' ) === 0 || strpos( $handle, 'customize-' ) === 0;
+	}
+
+	/**
+	 * Returns an array of scripts to exclude from our customizer instance
+	 *
+	 * @return array
+	 */
+	public function get_allowed_scripts() {
+		return apply_filters(
+			"presstomizer_{$this->id}_allowed_scripts",
+			array(
+				'jquery-core',
+				'jquery-migrate',
+				'jquery',
+				'customize-preview',
+				'customize-controls',
+				'query-monitor',
+				'dashicons-css'
+			)
+		);
 	}
 
 	/**
@@ -202,30 +264,143 @@ class presstomizer {
 	 *
 	 * @since 1.0.0
 	 */
-	public function remove_scripts() {
-		global $wp_scripts;
+	public function remove_external_scripts(){
+		global $wp_scripts, $wp_styles;
 
-		$exceptions = apply_filters(
-			"presstomizer_{$this->id}_allowed_scripts",
-			array(
-				'jquery',
-				'customize-preview',
-				'customize-controls',
-			)
-		);
+		$exceptions = $this->get_allowed_scripts();
 
 		if ( is_object( $wp_scripts ) && isset( $wp_scripts->queue ) && is_array( $wp_scripts->queue ) ) {
 
 			foreach ( $wp_scripts->queue as $handle ) {
-
-				if ( ! in_array( $handle, $exceptions, true ) ) {
+				if ( ! in_array( $handle, $exceptions ) && ! $this->is_built_in( $handle ) ) {
 					wp_dequeue_script( $handle );
-				}
-				
+				}				
 			}
 
 		}
 
+		if ( is_object( $wp_styles ) && isset( $wp_styles->queue ) && is_array( $wp_styles->queue ) ) {
+
+			foreach ( $wp_styles->queue as $handle ){
+				if ( ! in_array( $handle, $exceptions ) && ! $this->is_built_in( $handle ) ) {
+					wp_dequeue_style( $handle );
+				}				
+			}
+
+		}
+
+	}
+
+	/**
+	 * Checks if a given callback is from a whitelisted class.
+	 *
+	 * @since 1.0.0
+	 * @return array
+	 */
+	protected function is_whitelisted( $cb ) {
+
+		if ( ! is_array(  $cb ) || ! is_object( $cb[0] ) ) {
+			return false;
+		}
+
+		$class_name = get_class( $cb[0] );
+
+		if ( strpos( $class_name, 'WP_Customize' ) === 0 ) {
+			return true;
+		}
+
+		return in_array( $class_name, array( 'QM_Collector_Assets_Scripts', 'QM_Collector_Assets_Styles', 'QM_Dispatcher_Html' ), true );
+
+	}
+
+	/**
+	 * Removes all functions attached to a given hook's priority.
+	 *
+	 * @since 1.0.0
+	 * @return array
+	 */
+	protected function remove_action_handles( $handles, $exceptions ) {
+
+		if ( ! is_array( $handles ) ) {
+			return array();
+		}
+
+		// Loop through all callbacks in the level...
+		foreach ( $handles as $id => $data ) {
+
+			// ... and remove handles that are not in our exceptions list.
+			if ( ! in_array( $data['function'], $exceptions ) && ! $this->is_whitelisted(  $data['function'] ) ) {
+				unset( $handles[$id] );
+			}
+
+		}
+
+		return $handles;
+	}
+
+	/**
+	 * Remove header actions.
+	 *
+	 * @since 1.0.0
+	 */
+	public function remove_all_header_actions() {
+		global $wp_filter;
+
+		// Callbacks to skip.
+		$action_exceptions = array(
+			'wp_enqueue_scripts',
+			'wp_print_head_scripts',
+			'wp_print_styles',
+			'wp_generator',
+			'wp_site_icon',
+			array( $this, 'remove_external_scripts' )
+		);
+
+		// Remove all callbacks that are not in the above array.
+		foreach ( $wp_filter['wp_head'] as $priority => $handles ) {
+			$wp_filter['wp_head'][ $priority ] = $this->remove_action_handles( $handles, $action_exceptions );
+		}
+
+	}
+
+	/**
+	 * Remove footer actions.
+	 *
+	 * @since 1.0.0
+	 */
+	public function remove_all_footer_actions() {
+		global $wp_filter;
+
+		// Callbacks to skip.
+		$action_exceptions = array(
+			'wp_print_footer_scripts',
+			'wp_admin_bar_render',
+			array( $this, 'remove_external_scripts' )
+		);
+
+		// Remove all callbacks that are not in the above array.
+		foreach ( $wp_filter['wp_footer'] as $priority => $handles ) {
+			$wp_filter['wp_footer'][ $priority ] = $this->remove_action_handles( $handles, $action_exceptions );			
+		}
+
+	}
+
+	/**
+	 * Register custom customizer scripts.
+	 *
+	 * @since 1.0.0
+	 */
+	public function enqueue_scripts() {
+		do_action( "presstomizer_{$this->id}_enqueue_scripts" );
+	}
+
+	/**
+	 * Enqueue scripts for preview area
+	 *
+	 * @since 1.0.0
+	 */
+	public function enqueue_template_scripts(){
+		do_action( "presstomizer_{$this->id}_enqueue_template_scripts" );
 	}
 
 }
